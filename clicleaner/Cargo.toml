@@ -1,0 +1,29 @@
+[package]
+name = "clicleaner"
+version = "0.1.0"
+edition = "2021"
+description = "Fast CLI utility to scan and clean node_modules and .NET/NuGet bin, obj, and packages folders"
+readme = "README.md"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+comfy-table = "7.1"
+console = "0.15"
+dialoguer = "0.11"
+globset = "0.4"
+humantime = "2.1"
+humansize = "2.1"
+indicatif = { version = "0.17", features = ["rayon"] }
+jwalk = "0.8"
+rayon = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+trash = "5.1"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+tempfile = "3.12"
