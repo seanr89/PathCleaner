@@ -63,6 +63,8 @@ pub fn print_targets_table(root_path: &Path, targets: &[CleanTarget]) {
         let display_path = relative_display_path(root_path, &target.path);
         let ecosystem_color = match target.kind.ecosystem_label() {
             "Node.js" => Color::Green,
+            "Rust / Cargo" => Color::Red,
+            "GitHub" => Color::Blue,
             _ => Color::Magenta,
         };
 

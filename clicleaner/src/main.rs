@@ -46,8 +46,11 @@ fn run(args: CliArgs) -> anyhow::Result<()> {
         root_path: args.target_path.clone(),
         scan_node: args.scan_node(),
         scan_nuget: args.scan_nuget(),
+        scan_rust: args.scan_rust(),
+        scan_github: args.scan_github(),
         include_obj: args.include_obj,
         strict_node: args.strict,
+        max_depth: args.max_depth,
         older_than,
         exclude_patterns: args.exclude.clone(),
     };
@@ -100,7 +103,7 @@ fn run(args: CliArgs) -> anyhow::Result<()> {
 
     if targets.is_empty() {
         println!(
-            "{} No cleanable `node_modules` or .NET/NuGet directories found in {} ({:.0?}).",
+            "{} No cleanable artifact directories found in {} ({:.0?}).",
             style("✔").green().bold(),
             style(args.target_path.display()).cyan(),
             elapsed

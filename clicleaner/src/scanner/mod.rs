@@ -20,6 +20,8 @@ pub enum ArtifactKind {
     DotNetBin,
     DotNetObj,
     NuGetPackages,
+    RustTarget,
+    GitHubPackages,
 }
 
 impl ArtifactKind {
@@ -29,6 +31,8 @@ impl ArtifactKind {
             ArtifactKind::DotNetBin | ArtifactKind::DotNetObj | ArtifactKind::NuGetPackages => {
                 ".NET / NuGet"
             }
+            ArtifactKind::RustTarget => "Rust / Cargo",
+            ArtifactKind::GitHubPackages => "GitHub",
         }
     }
 
@@ -38,6 +42,8 @@ impl ArtifactKind {
             ArtifactKind::DotNetBin => "bin",
             ArtifactKind::DotNetObj => "obj",
             ArtifactKind::NuGetPackages => "packages",
+            ArtifactKind::RustTarget => "target",
+            ArtifactKind::GitHubPackages => "github_packages",
         }
     }
 }
@@ -76,8 +82,11 @@ pub struct ScanConfig {
     pub root_path: PathBuf,
     pub scan_node: bool,
     pub scan_nuget: bool,
+    pub scan_rust: bool,
+    pub scan_github: bool,
     pub include_obj: bool,
     pub strict_node: bool,
+    pub max_depth: Option<usize>,
     pub older_than: Option<Duration>,
     pub exclude_patterns: Vec<String>,
 }
@@ -106,60 +115,69 @@ pub fn scan_directory(config: &ScanConfig) -> Result<Vec<CleanTarget>, CleanerEr
 
     let scan_node = config.scan_node;
     let scan_nuget = config.scan_nuget;
+    let scan_rust = config.scan_rust;
+    let scan_github = config.scan_github;
     let include_obj = config.include_obj;
     let strict_node = config.strict_node;
     let discovered_clone = Arc::clone(&discovered);
 
-    let walker = WalkDir::new(&config.root_path)
+    let mut walker = WalkDir::new(&config.root_path)
         .skip_hidden(false)
-        .follow_links(false)
-        .process_read_dir(move |_depth, _path, _read_dir_state, children| {
-            children.retain_mut(|dir_entry_result| {
-                let Ok(dir_entry) = dir_entry_result else {
-                    return true;
-                };
+        .follow_links(false);
 
-                if !dir_entry.file_type().is_dir() {
-                    return false; // We only need to inspect directories during the discovery walk
+    if let Some(depth) = config.max_depth {
+        walker = walker.max_depth(depth);
+    }
+
+    let walker = walker.process_read_dir(move |_depth, _path, _read_dir_state, children| {
+        children.retain_mut(|dir_entry_result| {
+            let Ok(dir_entry) = dir_entry_result else {
+                return true;
+            };
+
+            if !dir_entry.file_type().is_dir() {
+                return false; // We only need to inspect directories during the discovery walk
+            }
+
+            let entry_path = dir_entry.path();
+            let Some(dir_name) = entry_path.file_name().and_then(|n| n.to_str()) else {
+                return true;
+            };
+
+            // Skip hidden VCS directories (.git, .hg, .svn)
+            if is_vcs_directory(dir_name) {
+                dir_entry.read_children_path = None;
+                return false;
+            }
+
+            // Skip user-excluded glob patterns
+            if exclude_set.is_match(&entry_path) || exclude_set.is_match(dir_name) {
+                dir_entry.read_children_path = None;
+                return false;
+            }
+
+            // Check if this directory is a cleanable target
+            if let Some(kind) = classify_directory(
+                &entry_path,
+                dir_name,
+                scan_node,
+                scan_nuget,
+                scan_rust,
+                scan_github,
+                include_obj,
+                strict_node,
+            ) {
+                // Prune descent so we never recurse into matched target subtrees
+                dir_entry.read_children_path = None;
+                if let Ok(mut guard) = discovered_clone.lock() {
+                    guard.push((entry_path, kind));
                 }
+                return false;
+            }
 
-                let entry_path = dir_entry.path();
-                let Some(dir_name) = entry_path.file_name().and_then(|n| n.to_str()) else {
-                    return true;
-                };
-
-                // Skip hidden VCS directories (.git, .hg, .svn)
-                if is_vcs_directory(dir_name) {
-                    dir_entry.read_children_path = None;
-                    return false;
-                }
-
-                // Skip user-excluded glob patterns
-                if exclude_set.is_match(&entry_path) || exclude_set.is_match(dir_name) {
-                    dir_entry.read_children_path = None;
-                    return false;
-                }
-
-                // Check if this directory is a target (`node_modules`, `bin`, `obj`, `packages`)
-                if let Some(kind) = classify_directory(
-                    &entry_path,
-                    dir_name,
-                    scan_node,
-                    scan_nuget,
-                    include_obj,
-                    strict_node,
-                ) {
-                    // Prune descent so we never recurse into nested node_modules or bin folders!
-                    dir_entry.read_children_path = None;
-                    if let Ok(mut guard) = discovered_clone.lock() {
-                        guard.push((entry_path, kind));
-                    }
-                    return false;
-                }
-
-                true
-            });
+            true
         });
+    });
 
     // Drive the parallel directory walker to completion
     for _ in walker {}
