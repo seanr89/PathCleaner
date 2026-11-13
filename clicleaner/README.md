@@ -1,6 +1,6 @@
 # `clicleaner`
 
-A blazing-fast, context-aware CLI utility written in **Rust** that scans a target directory tree for **Node.js (`node_modules`)** and **.NET / NuGet (`bin`, `obj`, `packages`)** directories, calculates reclaimable disk space in parallel, and removes them safely to free up space on your machine.
+A blazing-fast, context-aware CLI utility written in **Rust** that scans a target directory tree (including deeply nested workspaces) for **Node.js (`node_modules`)**, **.NET / NuGet (`bin`, `obj`, `packages`, `nupkgs`)**, **Rust / Cargo (`target`)**, and **GitHub package source** directories, calculates reclaimable disk space in parallel, and removes them safely to free up space on your machine.
 
 For the detailed system architecture, crate breakdown, and detection rules, see [DESIGN.md](./DESIGN.md).
 
@@ -11,7 +11,9 @@ For the detailed system architecture, crate breakdown, and detection rules, see 
 - **Multi-Threaded Traversal & Subtree Pruning**: Uses [`jwalk`](https://crates.io/crates/jwalk) and [`rayon`](https://crates.io/crates/rayon) to walk directories across all CPU cores and immediately stops descending inside matched `node_modules` or build folders, avoiding 95%+ of redundant filesystem syscalls.
 - **Context-Aware Safety Checks**:
   - **`node_modules`**: Automatically prunes nested `node_modules` and supports `--strict` mode to require a sibling `package.json` or lockfile.
-  - **`.NET / NuGet` (`bin`, `obj`, `packages`)**: Verifies parent/sibling project markers (`.csproj`, `.fsproj`, `.vbproj`, `.sln`, `packages.config`, or `.nupkg` artifacts) so generic `./bin` script folders or JavaScript monorepo `packages/` workspaces are **never** accidentally deleted.
+  - **`.NET / NuGet` (`bin`, `obj`, `packages`, `nupkgs`)**: Verifies parent/sibling project markers (`.csproj`, `.fsproj`, `.vbproj`, `.sln`, `Directory.Build.props`, `packages.config`, or `.nupkg` artifacts) and `.nuget/packages` caches so generic `./bin` script folders or monorepo `packages/` workspaces are **never** accidentally deleted.
+  - **Rust / Cargo (`target`)**: Verifies sibling `Cargo.toml` / `Cargo.lock` (or Cargo `CACHEDIR.TAG` / `.rustc_info.json` markers with a nearby `Cargo.toml`) before flagging `target/` directories.
+  - **GitHub Package Sources**: Identifies `.github/packages`, `.github/cache`, `.github/.cache`, `.github/artifacts`, `.github-packages`, and package directories configured against `pkg.github.com` while preserving `.github/workflows`.
   - **System Path Guard**: Refuses to scan root or operating system directories (`/`, `/System`, `/usr`, `C:\Windows`, etc.).
 - **Flexible Cleanup Modes**:
   - **Interactive Multi-Select (Default in TTY)**: Toggle individual directories to delete or keep with a live terminal checklist.
@@ -66,10 +68,16 @@ clicleaner ~/Documents/development --target node --yes
 # 5. Clean ONLY .NET / NuGet (bin, obj, packages) folders and move them to the OS Trash
 clicleaner ~/Documents/development --target nuget --trash --yes
 
-# 6. Only clean directories not modified in the last 30 days
+# 6. Clean ONLY Rust / Cargo target directories
+clicleaner ~/Documents/development --target rust --yes
+
+# 7. Clean ONLY GitHub package sources and caches
+clicleaner ~/Documents/development --target github --dry-run
+
+# 8. Only clean directories not modified in the last 30 days
 clicleaner ~/Documents/development --older-than 30d
 
-# 7. Exclude specific glob patterns and emit JSON for scripting
+# 9. Exclude specific glob patterns and emit JSON for scripting
 clicleaner ~/Documents/development --exclude "**/archive/**" --dry-run --json
 ```
 
@@ -78,9 +86,10 @@ clicleaner ~/Documents/development --exclude "**/archive/**" --dry-run --json
 | Option / Flag | Short | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `[TARGET_PATH]` | — | `.` | Root directory path to scan for cleanable artifacts |
-| `--target <TYPES>` | `-t` | `all` | Target ecosystems to scan: `all`, `node`, `nuget` (comma-separated) |
+| `--target <TYPES>` | `-t` | `all` | Target ecosystems to scan: `all`, `node`, `nuget`, `rust`, `github` (comma-separated) |
 | `--include-obj <BOOL>` | — | `true` | Include .NET `obj/` directories alongside `bin/` and NuGet `packages/` |
 | `--strict` | — | `false` | Require a sibling `package.json` or lockfile before flagging `node_modules` |
+| `--max-depth <DEPTH>` | — | Unlimited | Maximum directory recursion depth for nested searches |
 | `--dry-run` | `-d` | `false` | Scan and display reclaimable space without deleting anything |
 | `--interactive` | `-i` | `false` | Force interactive multi-select prompt before deletion |
 | `--yes` | `-y` | `false` | Skip confirmation prompts and delete all matched targets immediately |

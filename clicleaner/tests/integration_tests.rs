@@ -126,3 +126,119 @@ fn test_target_ecosystem_filter_and_json_output() {
     assert!(!root.join("app/node_modules").exists());
     assert!(root.join("svc/bin").exists());
 }
+
+#[test]
+fn test_rust_project_target_cleanup_and_safety() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    // 1. Root Cargo workspace with `target/`
+    let rust_ws = root.join("rust-workspace");
+    create_file_with_size(&rust_ws.join("Cargo.toml"), 180);
+    create_file_with_size(&rust_ws.join("target/debug/app"), 8_192);
+
+    // 2. Nested crate with its own `target/`
+    let nested_crate = rust_ws.join("crates/core");
+    create_file_with_size(&nested_crate.join("Cargo.toml"), 140);
+    create_file_with_size(&nested_crate.join("src/lib.rs"), 256);
+    create_file_with_size(&nested_crate.join("target/release/libcore.rlib"), 4_096);
+
+    // 3. Unrelated Java/Maven `target/` directory without Cargo.toml (MUST NOT be deleted!)
+    let java_app = root.join("java-app");
+    create_file_with_size(&java_app.join("pom.xml"), 200);
+    create_file_with_size(&java_app.join("target/classes/App.class"), 1_024);
+
+    let output = Command::cargo_bin("clicleaner")
+        .unwrap()
+        .arg(root)
+        .arg("--target")
+        .arg("rust")
+        .arg("--yes")
+        .arg("--json")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let discovered = json["discovered_targets"].as_array().unwrap();
+    assert_eq!(discovered.len(), 2);
+    assert!(discovered
+        .iter()
+        .all(|t| t["kind"].as_str() == Some("rust_target")));
+
+    // Both Rust target directories should be removed, while source files and Java target remain
+    assert!(!rust_ws.join("target").exists());
+    assert!(!nested_crate.join("target").exists());
+    assert!(rust_ws.join("Cargo.toml").exists());
+    assert!(nested_crate.join("src/lib.rs").exists());
+    assert!(java_app.join("target/classes/App.class").exists());
+}
+
+#[test]
+fn test_deep_nested_search_identifies_node_github_nuget_and_rust_sources() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    // Deeply nested monorepo `workspace/packages/*` containing both Node and Rust subprojects
+    let workspace = root.join("org/workspace");
+    create_file_with_size(&workspace.join("packages/web-ui/package.json"), 128);
+    create_file_with_size(
+        &workspace.join("packages/web-ui/node_modules/vite/index.js"),
+        4_096,
+    );
+    create_file_with_size(&workspace.join("packages/web-ui/src/index.ts"), 512);
+
+    create_file_with_size(&workspace.join("packages/rust-engine/Cargo.toml"), 160);
+    create_file_with_size(&workspace.join("packages/rust-engine/src/main.rs"), 512);
+    create_file_with_size(
+        &workspace.join("packages/rust-engine/target/debug/engine"),
+        8_192,
+    );
+
+    // Deeply nested .NET service and NuGet package sources (`.nuget/packages` & `nupkgs/`)
+    let dotnet_svc = workspace.join("services/dotnet/Billing");
+    create_file_with_size(&dotnet_svc.join("Billing.csproj"), 256);
+    create_file_with_size(&dotnet_svc.join("bin/Debug/net8.0/Billing.dll"), 4_096);
+    create_file_with_size(
+        &workspace.join("services/dotnet/.nuget/packages/serilog/3.1.1/serilog.3.1.1.nupkg"),
+        4_096,
+    );
+    create_file_with_size(
+        &workspace.join("feeds/nupkgs/MyLib.1.0.0.nupkg"),
+        2_048,
+    );
+
+    // Deeply nested GitHub package sources and caches, plus `.github/workflows` (MUST NOT be deleted!)
+    let repo = workspace.join("repo");
+    create_file_with_size(&repo.join(".github/workflows/ci.yml"), 512);
+    create_file_with_size(&repo.join(".github/packages/cached.tar.gz"), 4_096);
+    create_file_with_size(&repo.join(".github-packages/pkg.tgz"), 2_048);
+
+    let output = Command::cargo_bin("clicleaner")
+        .unwrap()
+        .arg(root)
+        .arg("--yes")
+        .arg("--json")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let discovered = json["discovered_targets"].as_array().unwrap();
+    assert_eq!(discovered.len(), 7);
+
+    // Verify all discovered nested targets were cleaned
+    assert!(!workspace.join("packages/web-ui/node_modules").exists());
+    assert!(!workspace.join("packages/rust-engine/target").exists());
+    assert!(!dotnet_svc.join("bin").exists());
+    assert!(!workspace.join("services/dotnet/.nuget/packages").exists());
+    assert!(!workspace.join("feeds/nupkgs").exists());
+    assert!(!repo.join(".github/packages").exists());
+    assert!(!repo.join(".github-packages").exists());
+
+    // Verify source files and `.github/workflows` were preserved
+    assert!(workspace.join("packages/web-ui/src/index.ts").exists());
+    assert!(workspace.join("packages/rust-engine/src/main.rs").exists());
+    assert!(dotnet_svc.join("Billing.csproj").exists());
+    assert!(repo.join(".github/workflows/ci.yml").exists());
+}

@@ -8,12 +8,16 @@ use crate::error::CleanerError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TargetEcosystem {
-    /// Scan both Node.js (`node_modules`) and .NET/NuGet (`bin`, `obj`, `packages`)
+    /// Scan all supported ecosystems (Node.js, .NET/NuGet, Rust/Cargo, and GitHub package sources)
     All,
     /// Scan only Node.js `node_modules` directories
     Node,
-    /// Scan only .NET and NuGet (`bin`, `obj`, `packages`) directories
+    /// Scan only .NET and NuGet (`bin`, `obj`, `packages`, `nupkgs`) directories
     Nuget,
+    /// Scan only Rust / Cargo (`target`) build directories
+    Rust,
+    /// Scan only GitHub package sources and cache directories (`.github/packages`, `.github/cache`, `.github-packages`, etc.)
+    Github,
 }
 
 impl TargetEcosystem {
@@ -24,14 +28,22 @@ impl TargetEcosystem {
     pub fn includes_nuget(self) -> bool {
         matches!(self, TargetEcosystem::All | TargetEcosystem::Nuget)
     }
+
+    pub fn includes_rust(self) -> bool {
+        matches!(self, TargetEcosystem::All | TargetEcosystem::Rust)
+    }
+
+    pub fn includes_github(self) -> bool {
+        matches!(self, TargetEcosystem::All | TargetEcosystem::Github)
+    }
 }
 
-/// Fast, context-aware CLI tool to scan and clean `node_modules` and .NET/NuGet (`bin`, `obj`, `packages`) directories.
+/// Fast, context-aware CLI tool to scan and clean `node_modules`, .NET/NuGet (`bin`, `obj`, `packages`, `nupkgs`), Rust (`target`), and GitHub package source directories.
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "clicleaner",
     version,
-    about = "Scan and clean node_modules and .NET/NuGet build & package directories to free disk space",
+    about = "Scan and clean node_modules, .NET/NuGet, Rust/Cargo, and GitHub package directories to free disk space",
     long_about = None
 )]
 pub struct CliArgs {
@@ -39,7 +51,7 @@ pub struct CliArgs {
     #[arg(value_name = "TARGET_PATH", default_value = ".")]
     pub target_path: PathBuf,
 
-    /// Target ecosystems to scan (`all`, `node`, `nuget`), comma-separated
+    /// Target ecosystems to scan (`all`, `node`, `nuget`, `rust`, `github`), comma-separated
     #[arg(
         short = 't',
         long = "target",
@@ -61,6 +73,10 @@ pub struct CliArgs {
     /// Require a sibling `package.json` or lockfile before flagging `node_modules`
     #[arg(long = "strict", default_value_t = false)]
     pub strict: bool,
+
+    /// Maximum directory recursion depth for nested searches (defaults to unlimited depth)
+    #[arg(long = "max-depth", value_name = "DEPTH")]
+    pub max_depth: Option<usize>,
 
     /// Scan and display reclaimable space without deleting anything
     #[arg(short = 'd', long = "dry-run", default_value_t = false)]
@@ -102,6 +118,14 @@ impl CliArgs {
 
     pub fn scan_nuget(&self) -> bool {
         self.targets.iter().any(|t| t.includes_nuget())
+    }
+
+    pub fn scan_rust(&self) -> bool {
+        self.targets.iter().any(|t| t.includes_rust())
+    }
+
+    pub fn scan_github(&self) -> bool {
+        self.targets.iter().any(|t| t.includes_github())
     }
 
     pub fn parsed_older_than(&self) -> Result<Option<Duration>, CleanerError> {
